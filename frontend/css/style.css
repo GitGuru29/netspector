@@ -114,6 +114,7 @@ header p {
 
 #legend-panel .internal { background: #2f80ff; }
 #legend-panel .external { background: #8b5cf6; }
+#legend-panel .hop { background: #6aa3ff; }
 #legend-panel .attacker { background: #ff3333; }
 #legend-panel .suspicious { background: #ffaa00; }
 
@@ -187,6 +188,7 @@ header p {
     backdrop-filter: blur(5px);
 }
 
+
 #log-panel h3 {
     font-size: 0.9rem;
     margin-bottom: 1rem;
@@ -251,6 +253,7 @@ header p {
         max-height: 220px;
         margin-top: auto;
     }
+
 
     #legend-panel {
         position: static;

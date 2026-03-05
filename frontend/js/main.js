@@ -9,6 +9,7 @@ const Graph = ForceGraph3D()(elem)
     .nodeResolution(16)
     .nodeLabel(node => `${node.id}\n${(node.role || 'internal_host').replace('_', ' ')}`)
     .nodeVal(node => {
+        if (node.role === 'router_hop') return 3.5;
         if (node.role === 'router') return 8;
         if (node.role === 'server') return 6;
         if (node.role === 'iot') return 4.5;
@@ -59,6 +60,7 @@ const Graph = ForceGraph3D()(elem)
         // Priority coloring: attacker > suspicious > external > internal.
         if (node.isAttacker) return '#ff3333'; // Red
         if (node.isAnomaly) return '#ffaa00'; // Orange
+        if (node.role === 'router_hop') return '#6aa3ff'; // Route hop
         if (node.isExternal) return '#8b5cf6'; // Purple external internet
         return '#2f80ff'; // Blue internal host
     })
@@ -91,6 +93,8 @@ const THREAT_LOG_COOLDOWN_MS = 5000;
 const FEED_STATUS_INTERVAL_MS = 8000;
 let lastFeedStatusAt = 0;
 const nodeContext = new Map();
+const hostStats = new Map();
+const ANOMALY_SCORE_THRESHOLD = 60;
 
 function isPrivateIp(ip) {
     if (!ip || typeof ip !== 'string') return false;
@@ -121,6 +125,34 @@ function getContext(ip) {
     }
     return nodeContext.get(ip);
 }
+
+function getHostStats(ip) {
+    if (!hostStats.has(ip)) {
+        hostStats.set(ip, {
+            cps: { n: 0, mean: 0, m2: 0 },
+            pps: { n: 0, mean: 0, m2: 0 },
+            ports: { n: 0, mean: 0, m2: 0 }
+        });
+    }
+    return hostStats.get(ip);
+}
+
+function updateRollingStat(stat, value) {
+    stat.n += 1;
+    const delta = value - stat.mean;
+    stat.mean += delta / stat.n;
+    const delta2 = value - stat.mean;
+    stat.m2 += delta * delta2;
+}
+
+function zScore(stat, value) {
+    if (stat.n < 10) return 0;
+    const variance = stat.m2 / Math.max(1, stat.n - 1);
+    const std = Math.sqrt(Math.max(variance, 0));
+    if (!std) return 0;
+    return (value - stat.mean) / std;
+}
+
 
 function deriveRole(ip) {
     if (isExternalIp(ip)) return 'external_ip';
@@ -159,6 +191,7 @@ function fixedNodePosition(node) {
     if (node.role === 'router') radius = 35;
     if (node.role === 'server') radius = 70;
     if (node.role === 'iot') radius = 120;
+    if (node.role === 'router_hop') radius = 155;
 
     return {
         x: Math.cos(angleA) * radius + (jitter * 0.9),
@@ -292,6 +325,7 @@ function connectWebSocket() {
         const msg = JSON.parse(event.data);
         if (msg.type === 'flows') {
             if (replayMode) return;
+            window.__latestTracePaths = msg.paths || {};
             processFlows(msg.data);
             return;
         }
@@ -318,6 +352,17 @@ function processFlows(flows, isReplayFrame = false) {
     threatCount = 0;
     const sourceThreatState = new Map();
     const now = Date.now();
+    const hostFrameMetrics = new Map();
+    const pathLinks = [];
+    const pathLinkSet = new Set();
+
+    const ensureNode = (ip, props = {}) => {
+        if (!nodeSet.has(ip)) {
+            nodeSet.add(ip);
+            newNodes.push({ id: ip, ...props });
+        }
+        nodeLastSeen.set(ip, now);
+    };
 
     // Evaluate Global Threat State
     let maxRisk = 0;
@@ -339,42 +384,60 @@ function processFlows(flows, isReplayFrame = false) {
         srcCtx.lastSeen = now;
         dstCtx.lastSeen = now;
 
+        const duration = Math.max(0.1, Number(f.duration) || 0.1);
+        const flowPps = (Number(f.packets) || 0) / duration;
+
+        if (!hostFrameMetrics.has(src)) {
+            hostFrameMetrics.set(src, { connections: 0, packetRate: 0, ports: new Set() });
+        }
+        if (!hostFrameMetrics.has(dst)) {
+            hostFrameMetrics.set(dst, { connections: 0, packetRate: 0, ports: new Set() });
+        }
+        const srcMetrics = hostFrameMetrics.get(src);
+        const dstMetrics = hostFrameMetrics.get(dst);
+        srcMetrics.connections += 1;
+        srcMetrics.packetRate += flowPps;
+        srcMetrics.ports.add(f.dst_port);
+        dstMetrics.packetRate += flowPps * 0.3;
+
         // Update tracking sets
-        if (!nodeSet.has(src)) { nodeSet.add(src); newNodes.push({ id: src, isExternal: isExternalIp(src), role: deriveRole(src) }); }
-        if (!nodeSet.has(dst)) { nodeSet.add(dst); newNodes.push({ id: dst, isExternal: isExternalIp(dst), role: deriveRole(dst) }); }
+        ensureNode(src, { isExternal: isExternalIp(src), role: deriveRole(src) });
+        ensureNode(dst, { isExternal: isExternalIp(dst), role: deriveRole(dst) });
 
         // Determine link styling based on threat assessment
-        let color = 'rgba(255, 255, 255, 0.2)'; // Thin white -> normal
-        let width = 0.5;
+        let color = 'rgba(255, 255, 255, 0.2)';
+        const packetRate = flowPps;
+        let width = packetRate < 15 ? 0.5 : (packetRate < 80 ? 1.4 : 3.2);
         let opacity = 0.4;
         let particleSpeed = 0.004;
         let attackType = 'normal';
+        const normalizedClass = (f.classification || 'normal').replace(/^remote_/, '');
         
         if (f.classification !== 'normal') {
             threatCount++;
             maxRisk = Math.max(maxRisk, f.risk_score);
             
-            if (f.classification === 'syn_scan' || f.classification === 'port_sweep' || f.classification === 'scanner' || f.classification === 'unusual_port_activity' || f.classification === 'unexpected_pattern') {
+            if (normalizedClass === 'syn_scan' || normalizedClass === 'port_sweep' || normalizedClass === 'scanner' || normalizedClass === 'unusual_port_activity' || normalizedClass === 'unexpected_pattern') {
                 color = '#ffaa00'; // Pulsing yellow
-                width = 1.0;
+                width = Math.max(width, 1.2);
                 particleSpeed = 0.01;
                 attackType = 'scan';
-            } else if (f.classification === 'icmp_flood' || f.classification === 'dos' || f.classification === 'dos+scanner' || f.classification === 'traffic_spike') {
+            } else if (normalizedClass === 'icmp_flood' || normalizedClass === 'dos' || normalizedClass === 'dos+scanner' || normalizedClass === 'traffic_spike') {
                 color = '#ff3333'; // Thick red
-                width = 3.0;
+                width = Math.max(width, 3.0);
                 opacity = 0.8;
                 particleSpeed = 0.03;
                 attackType = 'flood';
-            } else if (f.classification === 'dns_anomaly' || f.classification === 'exfiltration' || f.classification === 'c2_beacon') {
+            } else if (normalizedClass === 'dns_anomaly' || normalizedClass === 'exfiltration' || normalizedClass === 'c2_beacon') {
                 color = '#00ff00'; // Neon green
-                width = 2.0;
+                width = Math.max(width, 2.0);
                 particleSpeed = 0.008;
                 attackType = 'exfil';
             }
 
-            // Track per-source threat state so normal flows don't clear active attacker flags.
+            // Threat highlight: severe events turn node red, others yellow.
             const previous = sourceThreatState.get(src) || { isAttacker: false, isAnomaly: false };
-            if (f.classification === 'icmp_flood' || f.classification === 'dos' || f.classification === 'dos+scanner' || f.classification === 'traffic_spike') {
+            if (f.risk_score >= 70 || normalizedClass === 'icmp_flood' || normalizedClass === 'dos' || normalizedClass === 'dos+scanner') {
                 sourceThreatState.set(src, { isAttacker: true, isAnomaly: false });
             } else if (!previous.isAttacker) {
                 sourceThreatState.set(src, { isAttacker: false, isAnomaly: true });
@@ -383,9 +446,10 @@ function processFlows(flows, isReplayFrame = false) {
             // Log threat events deterministically with cooldown.
             if (f.risk_score > 35) {
                 const threatKey = `${f.classification}:${src}:${dst}`;
+                const hopText = f.hops_estimate && f.hops_estimate > 0 ? ` (~${Math.round(f.hops_estimate)} hops)` : '';
                 logThreatWithCooldown(
                     threatKey,
-                    `${f.classification.toUpperCase()} DETECTED from ${src} to ${dst}`,
+                    `[ALERT] ${f.classification.toUpperCase()} detected from ${src}${hopText}`,
                     f.classification.includes('dos') || f.classification.includes('flood')
                 );
             }
@@ -399,7 +463,54 @@ function processFlows(flows, isReplayFrame = false) {
             opacity: opacity,
             particleSpeed: particleSpeed,
             attackType: attackType,
+            packetRate: packetRate,
             value: f.bytes
+        });
+    });
+
+    // Draw traceroute hop chains for external targets.
+    const latestPaths = window.__latestTracePaths || {};
+    const addPathLink = (a, b) => {
+        const key = `${a}->${b}`;
+        if (pathLinkSet.has(key)) return;
+        pathLinkSet.add(key);
+        pathLinks.push({
+            source: a,
+            target: b,
+            color: 'rgba(106, 163, 255, 0.42)',
+            width: 0.8,
+            opacity: 0.28,
+            particleSpeed: 0.003,
+            attackType: 'normal',
+            value: 1
+        });
+    };
+    const flowsByTarget = new Map();
+    flows.forEach(f => {
+        const srcPrivate = !isExternalIp(f.src);
+        const dstPrivate = !isExternalIp(f.dst);
+        if (srcPrivate && !dstPrivate) {
+            if (!flowsByTarget.has(f.dst)) flowsByTarget.set(f.dst, new Set());
+            flowsByTarget.get(f.dst).add(f.src);
+        } else if (!srcPrivate && dstPrivate) {
+            if (!flowsByTarget.has(f.src)) flowsByTarget.set(f.src, new Set());
+            flowsByTarget.get(f.src).add(f.dst);
+        }
+    });
+    Object.entries(latestPaths).forEach(([target, hops]) => {
+        if (!Array.isArray(hops) || hops.length === 0) return;
+        const anchors = flowsByTarget.get(target);
+        if (!anchors || anchors.size === 0) return;
+
+        hops.forEach(hopIp => ensureNode(hopIp, { isExternal: true, role: 'router_hop', isPathHop: true }));
+        ensureNode(target, { isExternal: isExternalIp(target), role: deriveRole(target) });
+
+        anchors.forEach(anchor => {
+            addPathLink(anchor, hops[0]);
+            for (let i = 0; i < hops.length - 1; i++) {
+                addPathLink(hops[i], hops[i + 1]);
+            }
+            addPathLink(hops[hops.length - 1], target);
         });
     });
 
@@ -426,11 +537,41 @@ function processFlows(flows, isReplayFrame = false) {
 
     // Apply node statuses after evaluating the entire batch.
     graphData.nodes.forEach(node => {
+        const metrics = hostFrameMetrics.get(node.id);
+        if (metrics && !isReplayFrame) {
+            const stats = getHostStats(node.id);
+            updateRollingStat(stats.cps, metrics.connections);
+            updateRollingStat(stats.pps, metrics.packetRate);
+            updateRollingStat(stats.ports, metrics.ports.size);
+        }
+
+        const stats = getHostStats(node.id);
+        const cps = metrics ? metrics.connections : 0;
+        const pps = metrics ? metrics.packetRate : 0;
+        const portActivity = metrics ? metrics.ports.size : 0;
+        const anomalyScore = Math.min(
+            100,
+            Math.max(0, zScore(stats.cps, cps)) * 20 +
+            Math.max(0, zScore(stats.pps, pps)) * 20 +
+            Math.max(0, zScore(stats.ports, portActivity)) * 20
+        );
+
         const status = sourceThreatState.get(node.id);
-        node.isAttacker = Boolean(status?.isAttacker);
-        node.isAnomaly = Boolean(status?.isAnomaly);
-        node.isExternal = isExternalIp(node.id);
-        node.role = deriveRole(node.id);
+        if (!node.isPathHop) {
+            node.isAttacker = Boolean(status?.isAttacker);
+            node.isAnomaly = Boolean(status?.isAnomaly) || (!node.isAttacker && anomalyScore >= ANOMALY_SCORE_THRESHOLD);
+            node.isExternal = isExternalIp(node.id);
+            node.role = deriveRole(node.id);
+        } else {
+            node.isAttacker = false;
+            node.isAnomaly = false;
+            node.isExternal = true;
+            node.role = 'router_hop';
+        }
+        node.connections_per_second = cps;
+        node.packet_rate = pps;
+        node.port_activity = portActivity;
+        node.anomaly_score = Math.round(anomalyScore);
 
         const fixed = fixedNodePosition(node);
         node.x = fixed.x;
@@ -443,7 +584,7 @@ function processFlows(flows, isReplayFrame = false) {
 
     // We only keep nodes that are currently active (or we fade them out, but for now we keep them to maintain gravity)
     // Overwrite links because they are ephemeral
-    graphData.links = newLinks.filter(link => nodeSet.has(link.source) && nodeSet.has(link.target));
+    graphData.links = [...newLinks, ...pathLinks].filter(link => nodeSet.has(link.source) && nodeSet.has(link.target));
 
     Graph.graphData(graphData);
 

@@ -15,6 +15,8 @@ class Flow:
         self.syn_packets = 0
         self.icmp_packets = 0
         self.dns_queries = 0
+        self.ttl_sum = 0
+        self.ttl_samples = 0
         self.start_time = time.time()
         self.last_seen = time.time()
         
@@ -39,6 +41,10 @@ class Flow:
             self.icmp_packets += 1
         if flags.get("dns_query"):
             self.dns_queries += 1
+        ttl = flags.get("ttl")
+        if isinstance(ttl, int) and ttl > 0:
+            self.ttl_sum += ttl
+            self.ttl_samples += 1
         self.last_seen = time.time()
 
     def to_dict(self):
@@ -54,6 +60,7 @@ class Flow:
             "syn_packets": self.syn_packets,
             "icmp_packets": self.icmp_packets,
             "dns_queries": self.dns_queries,
+            "avg_ttl": (self.ttl_sum / self.ttl_samples) if self.ttl_samples > 0 else 0,
             "duration": self.last_seen - self.start_time,
             "risk_score": self.risk_score,
             "classification": self.classification
