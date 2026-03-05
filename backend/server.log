@@ -1,0 +1,22 @@
+[*] Starting synthetic traffic simulation...
+[*] Starting WebSocket Streamer on ws://127.0.0.1:8765
+Traceback (most recent call last):
+  File "/Users/siluna/Desktop/netspector/backend/main.py", line 35, in <module>
+    main()
+  File "/Users/siluna/Desktop/netspector/backend/main.py", line 29, in main
+    streamer.run()
+  File "/Users/siluna/Desktop/netspector/backend/streamer.py", line 55, in run
+    asyncio.run(self.start_server())
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/asyncio/runners.py", line 44, in run
+    return loop.run_until_complete(main)
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/asyncio/base_events.py", line 642, in run_until_complete
+    return future.result()
+  File "/Users/siluna/Desktop/netspector/backend/streamer.py", line 51, in start_server
+    async with websockets.serve(self.register, self.host, self.port):
+  File "/Users/siluna/Desktop/netspector/backend/venv/lib/python3.9/site-packages/websockets/asyncio/server.py", line 813, in __aenter__
+    return await self
+  File "/Users/siluna/Desktop/netspector/backend/venv/lib/python3.9/site-packages/websockets/asyncio/server.py", line 831, in __await_impl__
+    server = await self.create_server
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/asyncio/base_events.py", line 1494, in create_server
+    raise OSError(err.errno, 'error while attempting '
+OSError: [Errno 48] error while attempting to bind on address ('127.0.0.1', 8765): address already in use

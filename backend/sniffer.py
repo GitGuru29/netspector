@@ -43,7 +43,7 @@ class PacketEngine:
             proto = "OTHER"
             sport = 0
             dport = 0
-            flags = {}
+            flags = {"ttl": int(packet[IP].ttl)}
             
             if TCP in packet:
                 proto = "TCP"

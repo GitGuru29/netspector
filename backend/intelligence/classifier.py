@@ -38,6 +38,7 @@ class ThreatClassifier:
         self.TRAFFIC_SPIKE_MIN_BYTES = 50000
         self.UNUSUAL_PORT_THRESHOLD = 6
         self.UNEXPECTED_PATTERN_MIN_HISTORY = 20
+        self.REMOTE_HOP_THRESHOLD = 20
 
     def _is_private_ip(self, ip):
         parts = str(ip).split(".")
@@ -76,6 +77,15 @@ class ThreatClassifier:
         if std_dev == 0:
             return 0.0
         return (value - stats["mean"]) / std_dev
+
+    def _estimate_hops(self, observed_ttl):
+        ttl = int(observed_ttl) if observed_ttl else 0
+        if ttl <= 0:
+            return 0
+        # Approximate initial TTL baselines used by common stacks.
+        candidates = [32, 60, 64, 128, 255]
+        viable = [initial - ttl for initial in candidates if initial - ttl >= 0]
+        return min(viable) if viable else 0
 
     def analyze(self, flows):
         """Analyze a snapshot of active flow objects, returning a list of dicts with updated threat metrics."""
@@ -201,6 +211,7 @@ class ThreatClassifier:
             icmp_rate = self.ip_icmp[src]
             dns_rate = self.ip_dns[src]
             z_score = spike_zscore_by_src.get(src, 0.0)
+            hops_estimate = self._estimate_hops(flow.get("avg_ttl", 0))
 
             # SYN scan: many SYNs to many ports in short window.
             if syn_rate >= self.SYN_SCAN_SYN_THRESHOLD and port_count >= self.SYN_SCAN_PORT_THRESHOLD:
@@ -236,10 +247,16 @@ class ThreatClassifier:
             if flow_id in unexpected_pattern_flows and risk_score < 70:
                 classification = "unexpected_pattern"
                 risk_score = 70
+
+            # Remote-origin attacks: far path (~20+ routers) boosts severity.
+            if classification != "normal" and hops_estimate >= self.REMOTE_HOP_THRESHOLD:
+                classification = f"remote_{classification}"
+                risk_score = min(100, risk_score + 10)
             
             # Update flow dict
             flow["classification"] = classification
             flow["risk_score"] = risk_score
+            flow["hops_estimate"] = hops_estimate
             classified_flows.append(flow)
 
         # Update running baseline after classifying the current snapshot.

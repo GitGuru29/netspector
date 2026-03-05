@@ -5,6 +5,7 @@ from collections import deque
 import websockets
 
 from intelligence.classifier import ThreatClassifier
+from path_mapper import PathMapper
 
 class Streamer:
     def __init__(self, aggregator, host="127.0.0.1", port=8765):
@@ -16,6 +17,27 @@ class Streamer:
         self.classifier = ThreatClassifier()
         self.recent_events = deque()
         self.replay_window_seconds = 60
+        self.path_mapper = PathMapper()
+
+    def _is_private_ip(self, ip):
+        parts = str(ip).split(".")
+        if len(parts) != 4:
+            return False
+        try:
+            p = [int(x) for x in parts]
+        except ValueError:
+            return False
+        if p[0] == 10:
+            return True
+        if p[0] == 192 and p[1] == 168:
+            return True
+        if p[0] == 172 and 16 <= p[1] <= 31:
+            return True
+        if p[0] == 127:
+            return True
+        if p[0] == 169 and p[1] == 254:
+            return True
+        return False
 
     async def register(self, websocket):
         self.clients.add(websocket)
@@ -66,13 +88,22 @@ class Streamer:
                 
                 # Classify flows
                 classified_flows = self.classifier.analyze(flows)
+                for flow in classified_flows:
+                    src = flow.get("src")
+                    dst = flow.get("dst")
+                    if self._is_private_ip(src) and not self._is_private_ip(dst):
+                        self.path_mapper.request_trace(dst)
+                    elif not self._is_private_ip(src) and self._is_private_ip(dst):
+                        self.path_mapper.request_trace(src)
+                self.path_mapper.refresh()
+                paths = self.path_mapper.get_paths()
 
                 now = time.time()
                 self.recent_events.append({"ts": now, "data": classified_flows})
                 while self.recent_events and (now - self.recent_events[0]["ts"] > self.replay_window_seconds):
                     self.recent_events.popleft()
                 
-                message = json.dumps({"type": "flows", "data": classified_flows})
+                message = json.dumps({"type": "flows", "data": classified_flows, "paths": paths})
 
                 # Broadcast and evict broken connections
                 clients = list(self.clients)
