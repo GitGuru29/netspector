@@ -155,3 +155,46 @@ header p {
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--text-dim); border-radius: 3px; }
+
+@media (max-width: 1000px) {
+    #ui-layer {
+        padding: 1rem;
+    }
+
+    #stats-panel {
+        position: static;
+        margin-top: 1rem;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(110px, 1fr));
+        gap: 0.75rem;
+    }
+
+    .stat-box {
+        min-width: 0;
+        padding: 0.75rem;
+    }
+
+    .stat-box .value {
+        font-size: 1.2rem;
+    }
+
+    #log-panel {
+        width: 100%;
+        max-height: 220px;
+        margin-top: auto;
+    }
+}
+
+@media (max-width: 700px) {
+    h1 {
+        font-size: 1.6rem;
+    }
+
+    header p {
+        font-size: 0.75rem;
+    }
+
+    #stats-panel {
+        grid-template-columns: 1fr;
+    }
+}

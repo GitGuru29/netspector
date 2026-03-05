@@ -5,7 +5,7 @@ import websockets
 from intelligence.classifier import ThreatClassifier
 
 class Streamer:
-    def __init__(self, aggregator, host="0.0.0.0", port=8765):
+    def __init__(self, aggregator, host="127.0.0.1", port=8765):
         self.aggregator = aggregator
         self.host = host
         self.port = port
@@ -18,7 +18,7 @@ class Streamer:
         try:
             await websocket.wait_closed()
         finally:
-            self.clients.remove(websocket)
+            self.clients.discard(websocket)
 
     async def emit_loop(self):
         while self.running:
@@ -30,12 +30,16 @@ class Streamer:
                 classified_flows = self.classifier.analyze(flows)
                 
                 message = json.dumps({"type": "flows", "data": classified_flows})
-                
-                # Broadcast
-                await asyncio.gather(
-                    *[client.send(message) for client in self.clients],
+
+                # Broadcast and evict broken connections
+                clients = list(self.clients)
+                results = await asyncio.gather(
+                    *[client.send(message) for client in clients],
                     return_exceptions=True
                 )
+                for client, result in zip(clients, results):
+                    if isinstance(result, Exception):
+                        self.clients.discard(client)
             
             # 100ms emission rate
             await asyncio.sleep(0.1)

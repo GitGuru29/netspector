@@ -16,9 +16,9 @@ const Graph = ForceGraph3D()(elem)
     .enableNodeDrag(false)
     .nodeColor(node => {
         // Node coloring logic
-        if (node.id.startsWith('185.') || node.id.startsWith('45.') || node.id.startsWith('91.')) return '#8800ff'; // External Threat
         if (node.isAttacker) return '#ff3333'; // Red
         if (node.isAnomaly) return '#ffaa00'; // Orange
+        if (node.id.startsWith('185.') || node.id.startsWith('45.') || node.id.startsWith('91.')) return '#8800ff'; // External Threat
         if (node.isExternal) return '#8800ff'; // Purple
         return '#00ffcc'; // Normal internal host
     })
@@ -33,13 +33,17 @@ const Graph = ForceGraph3D()(elem)
         );
     });
 
-// Post-processing setup (Bloom) for that glowing hacker aesthetic
-const { createBloomPass } = window; // If we add unreal bloom later, right now basic 3d-force-graph handles basic webgl
-
 // State mapping
 let graphData = { nodes: [], links: [] };
 let nodeSet = new Set();
 let threatCount = 0;
+const nodeLastSeen = new Map();
+const threatLogCooldown = new Map();
+const NODE_TTL_MS = 30000;
+const MAX_NODES = 300;
+const THREAT_LOG_COOLDOWN_MS = 5000;
+const FEED_STATUS_INTERVAL_MS = 8000;
+let lastFeedStatusAt = 0;
 
 // Update HUD
 const statFlows = document.getElementById('stat-flows');
@@ -57,37 +61,81 @@ function logThreat(msg, isCritical=false) {
     }
 }
 
+function logThreatWithCooldown(key, msg, isCritical=false) {
+    const now = Date.now();
+    const lastLogged = threatLogCooldown.get(key) || 0;
+    if (now - lastLogged < THREAT_LOG_COOLDOWN_MS) return;
+    threatLogCooldown.set(key, now);
+    logThreat(msg, isCritical);
+}
+
 // 2. WebSocket Connection
-const ws = new WebSocket('ws://localhost:8765');
+let ws = null;
 let hasConnected = false;
+let wsEndpointIndex = 0;
 
-ws.onopen = () => {
-    console.log('[*] Connected to NetSpectre Backend Engine');
-    logThreat('SYSTEM ONLINE. AWAITING INTEL...', false);
-    hasConnected = true;
-};
-
-ws.onerror = (e) => {
-    console.error('WebSocket Error', e);
-    if (!hasConnected) statStatus.innerText = 'ENGINE OFFLINE';
-    statStatus.className = 'value threat';
-};
-
-ws.onmessage = (event) => {
-    const msg = JSON.parse(event.data);
-    if (msg.type === 'flows') {
-        const flows = msg.data;
-        processFlows(flows);
+const wsEndpoints = (() => {
+    const host = window.location.hostname || 'localhost';
+    if (window.location.protocol === 'https:') {
+        return [
+            `wss://${host}:8765`,
+            'ws://127.0.0.1:8765',
+            'ws://localhost:8765'
+        ];
     }
-};
+    return [`ws://${host}:8765`, 'ws://127.0.0.1:8765', 'ws://localhost:8765'];
+})();
+
+function connectWebSocket() {
+    const endpoint = wsEndpoints[wsEndpointIndex];
+    statStatus.innerText = 'CONNECTING...';
+    statStatus.className = 'value warning';
+    ws = new WebSocket(endpoint);
+
+    ws.onopen = () => {
+        console.log(`[*] Connected to NetSpectre Backend Engine at ${endpoint}`);
+        logThreat(`SYSTEM ONLINE. STREAM: ${endpoint}`, false);
+        hasConnected = true;
+        statStatus.innerText = 'SECURE';
+        statStatus.className = 'value ok';
+    };
+
+    ws.onerror = (e) => {
+        console.error(`WebSocket Error (${endpoint})`, e);
+    };
+
+    ws.onclose = () => {
+        if (!hasConnected && wsEndpointIndex < wsEndpoints.length - 1) {
+            wsEndpointIndex += 1;
+            connectWebSocket();
+            return;
+        }
+        hasConnected = false;
+        statStatus.innerText = 'ENGINE OFFLINE';
+        statStatus.className = 'value threat';
+        // Auto-reconnect after 3 seconds
+        wsEndpointIndex = 0;
+        setTimeout(connectWebSocket, 3000);
+    };
+
+    ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'flows') {
+            const flows = msg.data;
+            processFlows(flows);
+        }
+    };
+}
+
+connectWebSocket();
 
 // 3. Flow Processing Logic
 function processFlows(flows) {
     let newNodes = [];
     let newLinks = [];
-    let currentNodes = new Set();
-    let oldThreats = threatCount;
     threatCount = 0;
+    const sourceThreatState = new Map();
+    const now = Date.now();
     
     // Evaluate Global Threat State
     let maxRisk = 0;
@@ -95,8 +143,8 @@ function processFlows(flows) {
     flows.forEach(f => {
         const src = f.src;
         const dst = f.dst;
-        currentNodes.add(src);
-        currentNodes.add(dst);
+        nodeLastSeen.set(src, now);
+        nodeLastSeen.set(dst, now);
 
         // Update tracking sets
         if(!nodeSet.has(src)) { nodeSet.add(src); newNodes.push({ id: src, isExternal: (src.startsWith('8.') || src.startsWith('1.') || src.startsWith('104.')) }); }
@@ -112,37 +160,38 @@ function processFlows(flows) {
             threatCount++;
             maxRisk = Math.max(maxRisk, f.risk_score);
             
-            if (f.classification === 'scanner') {
+            if (f.classification === 'syn_scan' || f.classification === 'port_sweep' || f.classification === 'scanner') {
                 color = '#ffaa00'; // Pulsing yellow
                 width = 1.0;
                 particleSpeed = 0.01;
-            } else if (f.classification === 'dos' || f.classification === 'dos+scanner') {
+            } else if (f.classification === 'icmp_flood' || f.classification === 'dos' || f.classification === 'dos+scanner') {
                 color = '#ff3333'; // Thick red
                 width = 3.0;
                 opacity = 0.8;
                 particleSpeed = 0.03;
-                
-                // Set node attacker status
-                const sourceNode = graphData.nodes.find(n => n.id === src);
-                if(sourceNode) sourceNode.isAttacker = true;
-                
-            } else if (f.classification === 'exfiltration' || f.classification === 'c2_beacon') {
+            } else if (f.classification === 'dns_anomaly' || f.classification === 'exfiltration' || f.classification === 'c2_beacon') {
                 color = '#00ff00'; // Neon green
                 width = 2.0;
                 particleSpeed = 0.008;
             }
-            
-            // Log new threats (naive implementation, logs repeatedly, but good for visual effect)
-            if (f.risk_score > 60 && Math.random() < 0.05) { 
-                logThreat(`${f.classification.toUpperCase()} DETECTED from ${src} to ${dst}`, f.classification.includes('dos'));
+
+            // Track per-source threat state so normal flows don't clear active attacker flags.
+            const previous = sourceThreatState.get(src) || { isAttacker: false, isAnomaly: false };
+            if (f.classification === 'icmp_flood' || f.classification === 'dos' || f.classification === 'dos+scanner') {
+                sourceThreatState.set(src, { isAttacker: true, isAnomaly: false });
+            } else if (!previous.isAttacker) {
+                sourceThreatState.set(src, { isAttacker: false, isAnomaly: true });
             }
-        } else {
-             // Clean node status if normal
-             const sourceNode = graphData.nodes.find(n => n.id === src);
-             if(sourceNode) {
-                 sourceNode.isAttacker = false;
-                 sourceNode.isAnomaly = false;
-             }
+            
+            // Log threat events deterministically with cooldown.
+            if (f.risk_score > 35) {
+                const threatKey = `${f.classification}:${src}:${dst}`;
+                logThreatWithCooldown(
+                    threatKey,
+                    `${f.classification.toUpperCase()} DETECTED from ${src} to ${dst}`,
+                    f.classification.includes('dos') || f.classification.includes('flood')
+                );
+            }
         }
 
         newLinks.push({
@@ -159,16 +208,46 @@ function processFlows(flows) {
     // Update graph data without losing physics momentum
     // Merge new nodes
     graphData.nodes = [...graphData.nodes, ...newNodes];
+
+    // Keep graph size bounded for long-running sessions.
+    graphData.nodes = graphData.nodes.filter(node => {
+        const seenAt = nodeLastSeen.get(node.id) || 0;
+        return (now - seenAt <= NODE_TTL_MS) || sourceThreatState.has(node.id);
+    });
+    if (graphData.nodes.length > MAX_NODES) {
+        graphData.nodes.sort((a, b) => (nodeLastSeen.get(b.id) || 0) - (nodeLastSeen.get(a.id) || 0));
+        graphData.nodes = graphData.nodes.slice(0, MAX_NODES);
+    }
+    nodeSet = new Set(graphData.nodes.map(node => node.id));
+    for (const ip of Array.from(nodeLastSeen.keys())) {
+        if (!nodeSet.has(ip)) nodeLastSeen.delete(ip);
+    }
+
+    // Apply node statuses after evaluating the entire batch.
+    graphData.nodes.forEach(node => {
+        const status = sourceThreatState.get(node.id);
+        node.isAttacker = Boolean(status?.isAttacker);
+        node.isAnomaly = Boolean(status?.isAnomaly);
+    });
     
     // We only keep nodes that are currently active (or we fade them out, but for now we keep them to maintain gravity)
     // Overwrite links because they are ephemeral
-    graphData.links = newLinks;
+    graphData.links = newLinks.filter(link => nodeSet.has(link.source) && nodeSet.has(link.target));
     
     Graph.graphData(graphData);
 
     // Update HUD Metrics
     statFlows.innerText = flows.length;
     statThreats.innerText = threatCount;
+
+    if (now - lastFeedStatusAt > FEED_STATUS_INTERVAL_MS) {
+        if (flows.length === 0) {
+            logThreat('No live packets received. Check backend mode/interface/sudo.', true);
+        } else {
+            logThreat(`Live telemetry: ${flows.length} active flows`, false);
+        }
+        lastFeedStatusAt = now;
+    }
     
     if (threatCount > 0) {
         statThreats.className = 'value threat';
