@@ -1,6 +1,5 @@
 import time
 import hashlib
-from collections import defaultdict
 import threading
 
 class Flow:
@@ -13,6 +12,9 @@ class Flow:
         
         self.packet_count = 0
         self.byte_volume = 0
+        self.syn_packets = 0
+        self.icmp_packets = 0
+        self.dns_queries = 0
         self.start_time = time.time()
         self.last_seen = time.time()
         
@@ -27,9 +29,16 @@ class Flow:
         s = f"{self.src_ip}:{self.src_port}-{self.dst_ip}:{self.dst_port}-{self.protocol}"
         return hashlib.md5(s.encode()).hexdigest()[:12]
 
-    def update(self, packet_size):
+    def update(self, packet_size, flags=None):
+        flags = flags or {}
         self.packet_count += 1
         self.byte_volume += packet_size
+        if flags.get("tcp_syn"):
+            self.syn_packets += 1
+        if flags.get("icmp_echo"):
+            self.icmp_packets += 1
+        if flags.get("dns_query"):
+            self.dns_queries += 1
         self.last_seen = time.time()
 
     def to_dict(self):
@@ -42,6 +51,9 @@ class Flow:
             "protocol": self.protocol,
             "packets": self.packet_count,
             "bytes": self.byte_volume,
+            "syn_packets": self.syn_packets,
+            "icmp_packets": self.icmp_packets,
+            "dns_queries": self.dns_queries,
             "duration": self.last_seen - self.start_time,
             "risk_score": self.risk_score,
             "classification": self.classification
@@ -54,7 +66,7 @@ class FlowAggregator:
         self.timeout = timeout
         self.lock = threading.Lock()
         
-    def add_packet(self, src_ip, dst_ip, src_port, dst_port, protocol, size):
+    def add_packet(self, src_ip, dst_ip, src_port, dst_port, protocol, size, flags=None):
         # We use a simple directional flow ID
         s = f"{src_ip}:{src_port}-{dst_ip}:{dst_port}-{protocol}"
         flow_id = hashlib.md5(s.encode()).hexdigest()[:12]
@@ -63,7 +75,7 @@ class FlowAggregator:
             if flow_id not in self.flows:
                 self.flows[flow_id] = Flow(src_ip, dst_ip, src_port, dst_port, protocol)
                 
-            self.flows[flow_id].update(size)
+            self.flows[flow_id].update(size, flags=flags)
         
     def get_active_flows(self):
         # Clean up old flows and return active ones

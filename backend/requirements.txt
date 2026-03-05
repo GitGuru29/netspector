@@ -1,0 +1,5 @@
+scapy>=2.5.0
+websockets>=12.0
+# System requirements for live capture credibility:
+# - libpcap (packet capture backend used by scapy when available)
+# - tcpdump (recommended for side-by-side capture validation)

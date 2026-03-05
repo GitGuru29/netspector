@@ -77,6 +77,52 @@ header p {
     pointer-events: auto;
 }
 
+#legend-panel {
+    position: absolute;
+    top: 8rem;
+    right: 2rem;
+    width: 260px;
+    background: var(--panel-bg);
+    border: var(--border);
+    border-left: 3px solid #2f80ff;
+    padding: 1rem;
+    border-radius: 4px;
+    pointer-events: auto;
+    backdrop-filter: blur(5px);
+}
+
+#legend-panel h3 {
+    font-size: 0.8rem;
+    margin-bottom: 0.6rem;
+}
+
+#legend-panel ul {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    font-size: 0.78rem;
+}
+
+#legend-panel .dot {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    margin-right: 0.5rem;
+}
+
+#legend-panel .internal { background: #2f80ff; }
+#legend-panel .external { background: #8b5cf6; }
+#legend-panel .attacker { background: #ff3333; }
+#legend-panel .suspicious { background: #ffaa00; }
+
+#legend-panel .legend-roles {
+    margin-top: 0.7rem;
+    color: var(--text-dim);
+    font-size: 0.72rem;
+}
+
 .stat-box {
     background: var(--panel-bg);
     border: var(--border);
@@ -98,6 +144,28 @@ header p {
 .stat-box .value {
     font-size: 1.8rem;
     font-weight: bold;
+}
+
+.replay-box {
+    text-align: center;
+}
+
+.action-btn {
+    font-family: inherit;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--text-main);
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(0, 255, 204, 0.35);
+    border-radius: 4px;
+    padding: 0.45rem 0.65rem;
+    cursor: pointer;
+    pointer-events: auto;
+}
+
+.action-btn:hover {
+    border-color: rgba(0, 255, 204, 0.75);
 }
 
 .value.threat { color: var(--alert-red); }
@@ -155,3 +223,52 @@ header p {
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--text-dim); border-radius: 3px; }
+
+@media (max-width: 1000px) {
+    #ui-layer {
+        padding: 1rem;
+    }
+
+    #stats-panel {
+        position: static;
+        margin-top: 1rem;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(110px, 1fr));
+        gap: 0.75rem;
+    }
+
+    .stat-box {
+        min-width: 0;
+        padding: 0.75rem;
+    }
+
+    .stat-box .value {
+        font-size: 1.2rem;
+    }
+
+    #log-panel {
+        width: 100%;
+        max-height: 220px;
+        margin-top: auto;
+    }
+
+    #legend-panel {
+        position: static;
+        width: 100%;
+        margin-top: 0.75rem;
+    }
+}
+
+@media (max-width: 700px) {
+    h1 {
+        font-size: 1.6rem;
+    }
+
+    header p {
+        font-size: 0.75rem;
+    }
+
+    #stats-panel {
+        grid-template-columns: 1fr;
+    }
+}

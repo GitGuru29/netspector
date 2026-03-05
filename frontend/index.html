@@ -33,6 +33,21 @@
                 <span class="label">SYSTEM STATUS</span>
                 <span id="stat-status" class="value ok">SECURE</span>
             </div>
+            <div class="stat-box replay-box">
+                <span class="label">ATTACK REPLAY</span>
+                <button id="replay-btn" class="action-btn">Replay Last 60s</button>
+            </div>
+        </div>
+
+        <div id="legend-panel">
+            <h3>NODE MEANING</h3>
+            <ul>
+                <li><span class="dot internal"></span>Blue: Internal host</li>
+                <li><span class="dot external"></span>Purple: External internet IP</li>
+                <li><span class="dot attacker"></span>Red: Attacker</li>
+                <li><span class="dot suspicious"></span>Yellow: Suspicious</li>
+            </ul>
+            <p class="legend-roles">Roles: Router / Server / IoT / External IP</p>
         </div>
         
         <div id="log-panel">
