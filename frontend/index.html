@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NetSpectre | 3D Cyber Defense</title>
+    <link rel="stylesheet" href="css/style.css">
+    
+    <!-- Three.js and controls -->
+    <script src="https://unpkg.com/three@0.150.0/build/three.min.js"></script>
+    <script src="https://unpkg.com/three@0.150.0/examples/js/controls/OrbitControls.js"></script>
+    
+    <!-- 3D Force Graph Library by vasturiano (builds on Three.js and d3-force-3d) -->
+    <script src="https://unpkg.com/3d-force-graph@1.72.3/dist/3d-force-graph.min.js"></script>
+</head>
+<body>
+    <div id="ui-layer">
+        <header>
+            <h1>NetSpectre</h1>
+            <p>Real-Time 3D Network Defense Engine</p>
+        </header>
+        
+        <div id="stats-panel">
+            <div class="stat-box">
+                <span class="label">ACTIVE FLOWS</span>
+                <span id="stat-flows" class="value">0</span>
+            </div>
+            <div class="stat-box">
+                <span class="label">THREATS DETECTED</span>
+                <span id="stat-threats" class="value threat">0</span>
+            </div>
+            <div class="stat-box">
+                <span class="label">SYSTEM STATUS</span>
+                <span id="stat-status" class="value ok">SECURE</span>
+            </div>
+        </div>
+        
+        <div id="log-panel">
+            <h3>THREAT INTEL FEED</h3>
+            <ul id="threat-logs">
+            </ul>
+        </div>
+    </div>
+
+    <!-- The 3D Canvas Container -->
+    <div id="3d-graph"></div>
+
+    <script src="js/main.js"></script>
+</body>
+</html>
