@@ -11,6 +11,8 @@ class ThreatClassifier:
         self.ip_bytes_time = defaultdict(float)
         self.ip_syn = defaultdict(int)
         self.ip_syn_time = defaultdict(float)
+        self.ip_syn_ports = defaultdict(set)
+        self.ip_syn_ports_time = defaultdict(float)
         self.ip_icmp = defaultdict(int)
         self.ip_icmp_time = defaultdict(float)
         self.ip_dns = defaultdict(int)
@@ -131,6 +133,9 @@ class ThreatClassifier:
             if current_time - self.ip_syn_time[src] > self.CHECK_WINDOW:
                 self.ip_syn[src] = 0
                 self.ip_syn_time[src] = current_time
+            if current_time - self.ip_syn_ports_time[src] > self.CHECK_WINDOW:
+                self.ip_syn_ports[src] = set()
+                self.ip_syn_ports_time[src] = current_time
 
             if current_time - self.ip_icmp_time[src] > self.CHECK_WINDOW:
                 self.ip_icmp[src] = 0
@@ -148,6 +153,8 @@ class ThreatClassifier:
             self.ip_ports[src].add(dst_port)
             self.ip_bytes[src] += max(0, volume_delta)
             self.ip_syn[src] += max(0, syn_delta)
+            if syn_delta > 0:
+                self.ip_syn_ports[src].add(dst_port)
             self.ip_icmp[src] += max(0, icmp_delta)
             self.ip_dns[src] += max(0, dns_delta)
             self.ip_last_seen[src] = current_time
@@ -186,6 +193,8 @@ class ThreatClassifier:
             self.ip_bytes_time.pop(ip, None)
             self.ip_syn.pop(ip, None)
             self.ip_syn_time.pop(ip, None)
+            self.ip_syn_ports.pop(ip, None)
+            self.ip_syn_ports_time.pop(ip, None)
             self.ip_icmp.pop(ip, None)
             self.ip_icmp_time.pop(ip, None)
             self.ip_dns.pop(ip, None)
@@ -207,7 +216,8 @@ class ThreatClassifier:
 
             byte_rate = self.ip_bytes[src]
             syn_rate = self.ip_syn[src]
-            port_count = len(self.ip_ports[src])
+            # Scan heuristics should only use TCP SYN destination ports.
+            port_count = len(self.ip_syn_ports[src])
             icmp_rate = self.ip_icmp[src]
             dns_rate = self.ip_dns[src]
             z_score = spike_zscore_by_src.get(src, 0.0)
@@ -219,7 +229,7 @@ class ThreatClassifier:
                 risk_score = min(100, 55 + port_count)
 
             # Port sweep: many unique destination ports even with lower SYN count.
-            if port_count >= self.PORT_SWEEP_THRESHOLD and risk_score < 70:
+            if port_count >= self.PORT_SWEEP_THRESHOLD and syn_rate >= 4 and risk_score < 70:
                 classification = "port_sweep"
                 risk_score = min(95, 40 + port_count)
 

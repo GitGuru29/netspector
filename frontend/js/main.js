@@ -1,5 +1,123 @@
 // NetSpectre Main Application Logic
 
+function getNodeColor(node) {
+    // Priority coloring: attacker > suspicious > user router > external > internal.
+    if (node.isAttacker) return '#ff3333';
+    if (node.isAnomaly) return '#ffaa00';
+    if (node.isUserRouter) return '#00e5ff';
+    if (node.role === 'router_hop') return '#6aa3ff';
+    if (node.isExternal) return '#8b5cf6';
+    return '#2f80ff';
+}
+
+function createRouterGlyph(node) {
+    if (typeof THREE === 'undefined') return null;
+    const color = getNodeColor(node);
+
+    const makeRouterIcon = ({ accent = '#9cc8ff', size = 120, user = false } = {}) => {
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return null;
+
+        // Transparent background + soft glow.
+        ctx.clearRect(0, 0, size, size);
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = accent;
+
+        // Router body.
+        ctx.fillStyle = '#13253f';
+        ctx.strokeStyle = accent;
+        ctx.lineWidth = 4;
+        const bodyX = size * 0.2;
+        const bodyY = size * 0.48;
+        const bodyW = size * 0.6;
+        const bodyH = size * 0.22;
+        ctx.beginPath();
+        if (typeof ctx.roundRect === 'function') {
+            ctx.roundRect(bodyX, bodyY, bodyW, bodyH, 10);
+            ctx.fill();
+            ctx.stroke();
+        } else {
+            ctx.fillRect(bodyX, bodyY, bodyW, bodyH);
+            ctx.strokeRect(bodyX, bodyY, bodyW, bodyH);
+        }
+
+        // Antennas.
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(size * 0.3, bodyY);
+        ctx.lineTo(size * 0.22, size * 0.24);
+        ctx.moveTo(size * 0.7, bodyY);
+        ctx.lineTo(size * 0.78, size * 0.24);
+        ctx.stroke();
+
+        // Wifi arcs.
+        ctx.lineWidth = 3;
+        [0.11, 0.17, 0.23].forEach((r) => {
+            ctx.beginPath();
+            ctx.arc(size * 0.5, size * 0.3, size * r, Math.PI * 1.05, Math.PI * 1.95);
+            ctx.stroke();
+        });
+
+        // LEDs.
+        ctx.fillStyle = '#67f4a8';
+        [0.39, 0.5, 0.61].forEach((x) => {
+            ctx.beginPath();
+            ctx.arc(size * x, size * 0.59, 3.5, 0, Math.PI * 2);
+            ctx.fill();
+        });
+
+        // User-router badge.
+        if (user) {
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = '#00e5ff';
+            ctx.strokeStyle = '#dffbff';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.arc(size * 0.84, size * 0.2, size * 0.11, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+            ctx.fillStyle = '#022638';
+            ctx.font = `bold ${Math.floor(size * 0.14)}px sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('U', size * 0.84, size * 0.2);
+        }
+
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.needsUpdate = true;
+        const material = new THREE.SpriteMaterial({
+            map: texture,
+            transparent: true,
+            depthWrite: false
+        });
+        const sprite = new THREE.Sprite(material);
+        sprite.scale.set(16, 16, 1);
+        return sprite;
+    };
+
+    if (node.isUserRouter) return makeRouterIcon({ accent: '#6ef7ff', user: true });
+    if (node.role === 'router') return makeRouterIcon({ accent: color });
+
+    if (node.role === 'router_hop') {
+        return new THREE.Mesh(
+            new THREE.TetrahedronGeometry(3.4, 0),
+            new THREE.MeshBasicMaterial({ color })
+        );
+    }
+
+    return null;
+}
+
+function isLikelyUserRouter(ip) {
+    if (!isPrivateIp(ip)) return false;
+    const parts = ip.split('.');
+    if (parts.length !== 4) return false;
+    return Number(parts[3]) === 1;
+}
+
 // 1. Initialize 3D Force Graph
 const elem = document.getElementById('3d-graph');
 const Graph = ForceGraph3D()(elem)
@@ -7,9 +125,14 @@ const Graph = ForceGraph3D()(elem)
     .nodeRelSize(4)
     .nodeAutoColorBy('group')
     .nodeResolution(16)
-    .nodeLabel(node => `${node.id}\n${(node.role || 'internal_host').replace('_', ' ')}`)
+    .nodeLabel(node => {
+        const role = (node.role || 'internal_host').replace('_', ' ');
+        const tag = node.isUserRouter ? '\nYOUR ROUTER' : '';
+        return `${node.id}\n${role}${tag}`;
+    })
     .nodeVal(node => {
         if (node.role === 'router_hop') return 3.5;
+        if (node.isUserRouter) return 10;
         if (node.role === 'router') return 8;
         if (node.role === 'server') return 6;
         if (node.role === 'iot') return 4.5;
@@ -56,14 +179,9 @@ const Graph = ForceGraph3D()(elem)
         return link.width;
     })
     .enableNodeDrag(false)
-    .nodeColor(node => {
-        // Priority coloring: attacker > suspicious > external > internal.
-        if (node.isAttacker) return '#ff3333'; // Red
-        if (node.isAnomaly) return '#ffaa00'; // Orange
-        if (node.role === 'router_hop') return '#6aa3ff'; // Route hop
-        if (node.isExternal) return '#8b5cf6'; // Purple external internet
-        return '#2f80ff'; // Blue internal host
-    })
+    .nodeColor(node => getNodeColor(node))
+    .nodeThreeObject(node => createRouterGlyph(node))
+    .nodeThreeObjectExtend(true)
     .onNodeClick(node => {
         // Aim camera
         const distance = 100;
@@ -208,6 +326,7 @@ const threatLogs = document.getElementById('threat-logs');
 const replayBtn = document.getElementById('replay-btn');
 let replayTimer = null;
 let replayMode = false;
+let userRouterIp = null;
 
 function logThreat(msg, isCritical = false) {
     const li = document.createElement('li');
@@ -501,6 +620,9 @@ function processFlows(flows, isReplayFrame = false) {
         if (!Array.isArray(hops) || hops.length === 0) return;
         const anchors = flowsByTarget.get(target);
         if (!anchors || anchors.size === 0) return;
+        if (isPrivateIp(hops[0])) {
+            userRouterIp = hops[0];
+        }
 
         hops.forEach(hopIp => ensureNode(hopIp, { isExternal: true, role: 'router_hop', isPathHop: true }));
         ensureNode(target, { isExternal: isExternalIp(target), role: deriveRole(target) });
@@ -557,6 +679,7 @@ function processFlows(flows, isReplayFrame = false) {
         );
 
         const status = sourceThreatState.get(node.id);
+        node.isUserRouter = Boolean((userRouterIp && node.id === userRouterIp) || isLikelyUserRouter(node.id));
         if (!node.isPathHop) {
             node.isAttacker = Boolean(status?.isAttacker);
             node.isAnomaly = Boolean(status?.isAnomaly) || (!node.isAttacker && anomalyScore >= ANOMALY_SCORE_THRESHOLD);

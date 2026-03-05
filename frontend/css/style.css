@@ -115,6 +115,8 @@ header p {
 #legend-panel .internal { background: #2f80ff; }
 #legend-panel .external { background: #8b5cf6; }
 #legend-panel .hop { background: #6aa3ff; }
+#legend-panel .user-router { background: #00e5ff; }
+#legend-panel .router { background: #4f88ff; }
 #legend-panel .attacker { background: #ff3333; }
 #legend-panel .suspicious { background: #ffaa00; }
 
