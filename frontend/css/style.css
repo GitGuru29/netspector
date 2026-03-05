@@ -146,6 +146,28 @@ header p {
     font-weight: bold;
 }
 
+.replay-box {
+    text-align: center;
+}
+
+.action-btn {
+    font-family: inherit;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--text-main);
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(0, 255, 204, 0.35);
+    border-radius: 4px;
+    padding: 0.45rem 0.65rem;
+    cursor: pointer;
+    pointer-events: auto;
+}
+
+.action-btn:hover {
+    border-color: rgba(0, 255, 204, 0.75);
+}
+
 .value.threat { color: var(--alert-red); }
 .value.ok { color: var(--text-main); }
 .value.warning { color: #ffaa00; }

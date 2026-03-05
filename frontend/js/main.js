@@ -172,6 +172,9 @@ const statFlows = document.getElementById('stat-flows');
 const statThreats = document.getElementById('stat-threats');
 const statStatus = document.getElementById('stat-status');
 const threatLogs = document.getElementById('threat-logs');
+const replayBtn = document.getElementById('replay-btn');
+let replayTimer = null;
+let replayMode = false;
 
 function logThreat(msg, isCritical = false) {
     const li = document.createElement('li');
@@ -189,6 +192,51 @@ function logThreatWithCooldown(key, msg, isCritical = false) {
     if (now - lastLogged < THREAT_LOG_COOLDOWN_MS) return;
     threatLogCooldown.set(key, now);
     logThreat(msg, isCritical);
+}
+
+function stopReplayMode() {
+    if (replayTimer) {
+        clearInterval(replayTimer);
+        replayTimer = null;
+    }
+    if (replayMode) {
+        replayMode = false;
+        replayBtn.textContent = 'Replay Last 60s';
+        logThreat('Replay complete. Returning to live telemetry.', false);
+    }
+}
+
+function startReplay(frames, windowSeconds) {
+    if (!Array.isArray(frames) || frames.length === 0) {
+        logThreat('Replay unavailable: no events captured in requested window.', true);
+        stopReplayMode();
+        return;
+    }
+
+    stopReplayMode();
+    replayMode = true;
+    replayBtn.textContent = 'Stop Replay';
+    statStatus.innerText = 'REPLAY MODE';
+    statStatus.className = 'value warning';
+    logThreat(`Replaying last ${windowSeconds}s (${frames.length} frames)`, false);
+
+    let idx = 0;
+    replayTimer = setInterval(() => {
+        if (idx >= frames.length) {
+            stopReplayMode();
+            return;
+        }
+        processFlows(frames[idx].data, true);
+        idx += 1;
+    }, 100);
+}
+
+function requestReplay(seconds = 60) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+        logThreat('Replay failed: backend stream is offline.', true);
+        return;
+    }
+    ws.send(JSON.stringify({ type: 'replay_request', seconds }));
 }
 
 // 2. WebSocket Connection
@@ -243,16 +291,28 @@ function connectWebSocket() {
     ws.onmessage = (event) => {
         const msg = JSON.parse(event.data);
         if (msg.type === 'flows') {
-            const flows = msg.data;
-            processFlows(flows);
+            if (replayMode) return;
+            processFlows(msg.data);
+            return;
+        }
+        if (msg.type === 'replay_data') {
+            startReplay(msg.data || [], msg.window_seconds || 60);
         }
     };
 }
 
 connectWebSocket();
 
+replayBtn.addEventListener('click', () => {
+    if (replayMode) {
+        stopReplayMode();
+        return;
+    }
+    requestReplay(60);
+});
+
 // 3. Flow Processing Logic
-function processFlows(flows) {
+function processFlows(flows, isReplayFrame = false) {
     let newNodes = [];
     let newLinks = [];
     threatCount = 0;
@@ -294,12 +354,12 @@ function processFlows(flows) {
             threatCount++;
             maxRisk = Math.max(maxRisk, f.risk_score);
             
-            if (f.classification === 'syn_scan' || f.classification === 'port_sweep' || f.classification === 'scanner') {
+            if (f.classification === 'syn_scan' || f.classification === 'port_sweep' || f.classification === 'scanner' || f.classification === 'unusual_port_activity' || f.classification === 'unexpected_pattern') {
                 color = '#ffaa00'; // Pulsing yellow
                 width = 1.0;
                 particleSpeed = 0.01;
                 attackType = 'scan';
-            } else if (f.classification === 'icmp_flood' || f.classification === 'dos' || f.classification === 'dos+scanner') {
+            } else if (f.classification === 'icmp_flood' || f.classification === 'dos' || f.classification === 'dos+scanner' || f.classification === 'traffic_spike') {
                 color = '#ff3333'; // Thick red
                 width = 3.0;
                 opacity = 0.8;
@@ -314,7 +374,7 @@ function processFlows(flows) {
 
             // Track per-source threat state so normal flows don't clear active attacker flags.
             const previous = sourceThreatState.get(src) || { isAttacker: false, isAnomaly: false };
-            if (f.classification === 'icmp_flood' || f.classification === 'dos' || f.classification === 'dos+scanner') {
+            if (f.classification === 'icmp_flood' || f.classification === 'dos' || f.classification === 'dos+scanner' || f.classification === 'traffic_spike') {
                 sourceThreatState.set(src, { isAttacker: true, isAnomaly: false });
             } else if (!previous.isAttacker) {
                 sourceThreatState.set(src, { isAttacker: false, isAnomaly: true });
@@ -391,7 +451,7 @@ function processFlows(flows) {
     statFlows.innerText = flows.length;
     statThreats.innerText = threatCount;
 
-    if (now - lastFeedStatusAt > FEED_STATUS_INTERVAL_MS) {
+    if (!isReplayFrame && now - lastFeedStatusAt > FEED_STATUS_INTERVAL_MS) {
         if (flows.length === 0) {
             logThreat('No live packets received. Check backend mode/interface/sudo.', true);
         } else {
